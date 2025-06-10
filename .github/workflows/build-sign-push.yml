@@ -1,18 +1,16 @@
-name: Node.js Build-Sign-Push
+name: Build and Sign Docker Image
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
-  build-sign-push:
+  build-sign:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -23,24 +21,29 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and tag Docker image
-        run: |
-          docker build -t saivenkatvaraprasady/jenkin-node-app .
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: saivenkatvaraprasady/n8n-node-app:latest
 
       - name: Install Cosign
-        run: |
-          curl -Lo cosign https://artifacts.sigstore.dev/cosign/v2.2.4/cosign-linux-amd64
-          chmod +x cosign
-          sudo mv cosign /usr/local/bin/
+        uses: sigstore/cosign-installer@v3.2.0
 
-      - name: Generate Cosign Key
+      - name: Get image digest
+        id: digest
         run: |
-          cosign generate-key-pair
+          docker buildx imagetools inspect saivenkatvaraprasady/n8n-node-app:latest --raw > raw.json
+          echo "digest=$(jq -r '.manifests[0].digest' raw.json)" >> $GITHUB_OUTPUT
 
       - name: Sign Docker image
         run: |
-          cosign sign --key cosign.key saivenkatvaraprasady/jenkin-node-app
+          echo "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+          cosign sign --key cosign.key --yes "saivenkatvaraprasady/n8n-node-app@${{ steps.digest.outputs.digest }}"
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
 
-      - name: Push Docker image
+      - name: ✅ Verify Signed Image
         run: |
-          docker push saivenkatvaraprasady/jenkin-node-app
+          cosign verify --key <(echo "${{ secrets.COSIGN_PUBLIC_KEY }}") "saivenkatvaraprasady/n8n-node-app@${{ steps.digest.outputs.digest }}" || echo "Verification failed"
